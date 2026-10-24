@@ -6,8 +6,15 @@ React + [Arco Design](https://arco.design) 前端，Node 后端，**gost 与面�
 
 ## 界面
 
-- **概览**：服务数、入站/出站总量与速率、流量趋势图（30 分钟 ~ 12 小时）、服务只读概览
-- **转发管理**：新建 / 编辑 / 删除，支持端口转发与代理服务
+- **登录**：独立登录页，账号密码走服务端会话（HttpOnly Cookie，24h）
+- **概览**：服务数、入站/出站总量与速率统计，下方为紧凑式服务卡片（每张卡片带「复制」与「延迟」按钮）
+- **转发管理**：表格形式的新建 / 编辑 / 删除，支持端口转发与代理服务，行内可测延迟
+- **设置**：节点地址（导出用 host）、修改密码、当前会话与退出登录
+
+## 快捷操作
+
+- **一键复制**：代理服务复制 `socks5://user:pass@host:port`，端口转发复制 `host:port`，host 取自「设置 → 节点地址」
+- **延迟测试**：服务端发起到目标节点（转发取 `forwarder.nodes[0]`，代理取 `chain` 首个节点）的 TCP 握手，取 3 次采样最优值
 
 ## 支持的服务形态
 
@@ -47,7 +54,8 @@ cd web && npm install && npm run dev
 | 变量 | 说明 | 默认 |
 |---|---|---|
 | `PANEL_PORT` | 面板监听端口 | 8080 |
-| `PANEL_USER` / `PANEL_PASS` | 面板 Basic Auth | admin / admin |
+| `PANEL_USER` / `PANEL_PASS` | 面板初始账号密码（登录后可在设置页改，改动落 `/data/config.json`） | admin / admin |
+| `PUBLIC_HOST` | 导出链接使用的节点地址（设置页可覆盖） | 空 |
 | `GOST_API` | gost REST API 地址 | http://127.0.0.1:18080 |
 | `GOST_API_USER` / `GOST_API_PASS` | gost API 认证 | - |
 | `GOST_METRICS` | metrics 地址 | http://127.0.0.1:9000/metrics |
@@ -64,5 +72,5 @@ cd web && npm install && npm run dev
 
 ## 安全提示
 
-- 面板使用 HTTP Basic Auth，公网部署建议加一层 HTTPS 反代。
+- 面板登录后使用 HttpOnly 会话 Cookie，公网部署建议再加一层 HTTPS 反代。
 - Docker 发布的端口不受宿主机 iptables/ufw/1Panel 防火墙约束（DNAT 后走 FORWARD 链），需要限制访问请绑 `127.0.0.1` 走反代。

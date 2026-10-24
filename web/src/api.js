@@ -5,7 +5,11 @@ export async function api(path, opt = {}) {
   });
   let data = {};
   try { data = await res.json(); } catch { /* empty body */ }
-  if (!res.ok || data.ok === false) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok || data.ok === false) {
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -25,6 +29,25 @@ export function fmtRate(v) {
 export function hhmm(t) {
   const d = new Date(t);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+export async function copyText(text) {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
 }
 
 export const PROXY_TYPES = ['socks5', 'http', 'socks4', 'relay'];

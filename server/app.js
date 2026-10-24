@@ -3,6 +3,8 @@ const http = require('http');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
+const net = require('net');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const CFG = {
@@ -27,8 +29,13 @@ const CFG = {
 const MIN = 60000;
 const KEEP_MS = 24 * 3600 * 1000;
 const META_FILE = path.join(CFG.dataDir, 'services.json');
+const CONF_FILE = path.join(CFG.dataDir, 'config.json');
+const SESSION_TTL = 24 * 3600 * 1000;
 const FORWARD_TYPES = new Set(['tcp', 'udp']);
 const PROXY_TYPES = new Set(['socks5', 'http', 'socks4', 'relay']);
+
+let authCfg = { username: 'admin', salt: '', hash: '', publicHost: '' };
+const sessions = new Map();
 
 let meta = new Map();
 let prev = new Map();
@@ -97,6 +104,67 @@ async function saveMeta() {
   } catch (e) {
     log('meta save failed', e.message);
   }
+}
+
+/* ---------- 账号 / 会话 / 设置 ---------- */
+
+function hashPass(pass, salt) {
+  return crypto.scryptSync(String(pass), salt, 32).toString('hex');
+}
+
+async function loadConfig() {
+  try {
+    authCfg = JSON.parse(await fsp.readFile(CONF_FILE, 'utf8'));
+    if (!authCfg.salt || !authCfg.hash) throw new Error('bad config');
+    log('config loaded, user =', authCfg.username);
+  } catch {
+    const salt = crypto.randomBytes(16).toString('hex');
+    authCfg = {
+      username: CFG.user,
+      salt,
+      hash: hashPass(CFG.pass, salt),
+      publicHost: CFG.publicHost || '',
+    };
+    await saveConfig();
+    log('config initialized from env, user =', authCfg.username);
+  }
+}
+
+async function saveConfig() {
+  await fsp.mkdir(CFG.dataDir, { recursive: true });
+  await fsp.writeFile(CONF_FILE, JSON.stringify(authCfg, null, 2));
+}
+
+function verifyPassword(user, pass) {
+  if (String(user) !== authCfg.username) return false;
+  const h = Buffer.from(hashPass(pass, authCfg.salt), 'hex');
+  const t = Buffer.from(authCfg.hash, 'hex');
+  return h.length === t.length && crypto.timingSafeEqual(h, t);
+}
+
+function parseCookies(req) {
+  const out = {};
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+
+function issueSession(res) {
+  const token = crypto.randomBytes(24).toString('hex');
+  sessions.set(token, Date.now() + SESSION_TTL);
+  res.setHeader('Set-Cookie', `gp_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`);
+  return token;
+}
+
+function currentSession(req) {
+  const t = parseCookies(req).gp_session;
+  if (!t) return null;
+  const exp = sessions.get(t);
+  if (!exp) return null;
+  if (exp < Date.now()) { sessions.delete(t); return null; }
+  return t;
 }
 
 /* ---------- gost API ---------- */
@@ -265,6 +333,79 @@ function shapeService(s, chainMap) {
   };
 }
 
+function buildExportUrl(s) {
+  const host = authCfg.publicHost || CFG.publicHost || '';
+  if (!host) return '';
+  const m = meta.get(s.name);
+  if (PROXY_TYPES.has(s.type)) {
+    const scheme = s.type === 'relay' ? 'socks5' : s.type;
+    const u = s.auth || (m && m.authUser) || '';
+    const pw = (m && m.authPass) || '';
+    const auth = u && pw ? `${encodeURIComponent(u)}:${encodeURIComponent(pw)}@` : '';
+    return `${scheme}://${auth}${host}:${s.port}`;
+  }
+  return `${host}:${s.port}`;
+}
+
+function tcpPing(host, port, timeout = 3000) {
+  return new Promise((resolve) => {
+    const t0 = process.hrtime.bigint();
+    let settled = false;
+    const sock = net.connect({ host, port });
+    const done = (ok, error) => {
+      if (settled) return;
+      settled = true;
+      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+      sock.destroy();
+      resolve({ ok, ms: Math.round(ms * 10) / 10, error });
+    };
+    sock.setTimeout(timeout, () => done(false, 'timeout'));
+    sock.once('connect', () => done(true));
+    sock.once('error', (e) => done(false, e.code || e.message));
+  });
+}
+
+function splitHostPort(addr) {
+  const s = String(addr || '');
+  const i = s.lastIndexOf(':');
+  if (i < 0) return { host: s, port: 0 };
+  return { host: s.slice(0, i).replace(/^\[|\]$/g, ''), port: Number(s.slice(i + 1)) };
+}
+
+async function resolveProbeTarget(name) {
+  const list = await listServices();
+  const live = list.find((s) => s.name === name);
+  if (!live) return '';
+  const chainName = live.handler && live.handler.chain;
+  if (chainName) {
+    const chains = await listChains();
+    const ch = chains.find((c) => c.name === chainName);
+    const node = ch && ch.hops && ch.hops[0] && ch.hops[0].nodes && ch.hops[0].nodes[0];
+    if (node && node.addr) return node.addr;
+  }
+  const fw = live.forwarder && live.forwarder.nodes && live.forwarder.nodes[0];
+  if (fw && fw.addr) return fw.addr;
+  return '';
+}
+
+async function pingService(name) {
+  const target = await resolveProbeTarget(name);
+  if (!target) return { ok: false, error: '该服务没有可探测的上游或目标' };
+  const { host, port } = splitHostPort(target);
+  if (!host || !port) return { ok: false, target, error: `无法解析目标 ${target}` };
+  const samples = [];
+  for (let i = 0; i < 3; i += 1) {
+    const r = await tcpPing(host, port);
+    samples.push(r);
+    if (!r.ok) break;
+  }
+  const good = samples.filter((r) => r.ok).map((r) => r.ms);
+  if (!good.length) {
+    return { ok: false, target, error: (samples[0] && samples[0].error) || '连接失败' };
+  }
+  return { ok: true, target, ms: Math.min(...good), samples };
+}
+
 async function buildState() {
   let list = [];
   let chains = [];
@@ -277,13 +418,17 @@ async function buildState() {
   }
   const chainMap = new Map();
   for (const ch of chains) chainMap.set(ch.name, formatChain(ch));
-  const services = list.map((s) => shapeService(s, chainMap));
+  const services = list.map((s) => {
+    const shaped = shapeService(s, chainMap);
+    shaped.exportUrl = buildExportUrl(shaped);
+    return shaped;
+  });
   if (apiError) {
     for (const m of meta.values()) {
       services.push({
         name: m.name, addr: ':' + m.port, port: m.port, target: m.target || '',
         type: m.type || 'tcp', chain: m.chain || '', chainName: '', auth: m.authUser || '',
-        rx: 0, tx: 0, rxRate: 0, txRate: 0,
+        rx: 0, tx: 0, rxRate: 0, txRate: 0, exportUrl: buildExportUrl({ ...m, auth: m.authUser }),
       });
     }
   }
@@ -302,7 +447,7 @@ async function buildState() {
     apiError,
     lastError,
     lastCollect,
-    publicHost: CFG.publicHost,
+    publicHost: authCfg.publicHost || CFG.publicHost || '',
     portRange: [CFG.portStart, CFG.portEnd],
     totals: agg,
     services,
@@ -508,15 +653,9 @@ function json(res, code, obj) {
   res.end(JSON.stringify(obj));
 }
 
-function auth(req, res) {
-  const h = req.headers.authorization || '';
-  if (h.startsWith('Basic ')) {
-    const raw = Buffer.from(h.slice(6), 'base64').toString();
-    const i = raw.indexOf(':');
-    if (i > 0 && raw.slice(0, i) === CFG.user && raw.slice(i + 1) === CFG.pass) return true;
-  }
-  res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="gost panel", charset="UTF-8"' });
-  res.end('auth required');
+function requireAuth(req, res) {
+  if (currentSession(req)) return true;
+  json(res, 401, { ok: false, error: '未登录' });
   return false;
 }
 
@@ -588,9 +727,79 @@ const server = http.createServer(async (req, res) => {
 
   if (p === '/healthz') return json(res, 200, { ok: true, gostOnline, lastError });
 
-  if (!auth(req, res)) return;
+  if (p === '/api/login' && req.method === 'POST') {
+    try {
+      const b = await readBody(req);
+      if (!verifyPassword(b.username, b.password)) {
+        await new Promise((r) => { setTimeout(r, 400); });
+        return json(res, 401, { ok: false, error: '用户名或密码错误' });
+      }
+      issueSession(res);
+      log('login ok', authCfg.username);
+      return json(res, 200, { ok: true, username: authCfg.username });
+    } catch (e) {
+      return json(res, 400, { ok: false, error: e.message });
+    }
+  }
+
+  // 静态资源（含登录页）不鉴权，接口才鉴权
+  if (req.method === 'GET' && !p.startsWith('/api/')) {
+    if (await serveStatic(p, res)) return;
+    if (!path.extname(p) && await serveStatic('/index.html', res)) return;
+  }
+
+  if (!requireAuth(req, res)) return;
 
   try {
+    if (p === '/api/me') return json(res, 200, { ok: true, username: authCfg.username });
+
+    if (p === '/api/logout' && req.method === 'POST') {
+      const t = currentSession(req);
+      if (t) sessions.delete(t);
+      res.setHeader('Set-Cookie', 'gp_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      return json(res, 200, { ok: true });
+    }
+
+    if (p === '/api/settings') {
+      if (req.method === 'GET') {
+        return json(res, 200, {
+          ok: true,
+          username: authCfg.username,
+          publicHost: authCfg.publicHost || '',
+          portRange: [CFG.portStart, CFG.portEnd],
+        });
+      }
+      if (req.method === 'PUT') {
+        const b = await readBody(req);
+        authCfg.publicHost = String(b.publicHost || '')
+          .trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+        await saveConfig();
+        log('settings saved, publicHost =', authCfg.publicHost);
+        return json(res, 200, { ok: true, publicHost: authCfg.publicHost });
+      }
+    }
+
+    if (p === '/api/settings/password' && req.method === 'POST') {
+      const b = await readBody(req);
+      if (!verifyPassword(authCfg.username, b.oldPassword)) {
+        return json(res, 400, { ok: false, error: '原密码不正确' });
+      }
+      const next = String(b.newPassword || '');
+      if (next.length < 6) return json(res, 400, { ok: false, error: '新密码至少 6 位' });
+      authCfg.salt = crypto.randomBytes(16).toString('hex');
+      authCfg.hash = hashPass(next, authCfg.salt);
+      await saveConfig();
+      sessions.clear();
+      issueSession(res);
+      log('password changed');
+      return json(res, 200, { ok: true });
+    }
+
+    if (p.startsWith('/api/services/') && p.endsWith('/ping') && req.method === 'POST') {
+      const name = decodeURIComponent(p.slice('/api/services/'.length, -'/ping'.length));
+      return json(res, 200, await pingService(name));
+    }
+
     if (p === '/api/state') return json(res, 200, await buildState());
     if (p === '/api/series') {
       const minutes = Math.min(1440, Math.max(5, Number(url.searchParams.get('minutes')) || 60));
@@ -643,10 +852,6 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, await buildState());
     }
 
-    if (req.method === 'GET') {
-      if (await serveStatic(p, res)) return;
-      if (!path.extname(p) && await serveStatic('/index.html', res)) return;
-    }
     json(res, 404, { ok: false, error: 'not found' });
   } catch (e) {
     log('error', p, e.message);
@@ -656,6 +861,7 @@ const server = http.createServer(async (req, res) => {
 
 (async () => {
   await fsp.mkdir(CFG.dataDir, { recursive: true }).catch(() => {});
+  await loadConfig();
   await loadMeta();
   startGost();
   setTimeout(() => { collect(); reconcile(); }, 1500);
