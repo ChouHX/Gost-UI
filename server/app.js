@@ -34,6 +34,21 @@ const SESSION_TTL = 24 * 3600 * 1000;
 const FORWARD_TYPES = new Set(['tcp', 'udp']);
 const PROXY_TYPES = new Set(['socks5', 'http', 'socks4', 'relay']);
 
+// 自动生成代理账号：去掉容易看错的 0/O/1/l/I
+const CRED_ALPHABET = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function randStr(n) {
+  const buf = crypto.randomBytes(n);
+  let out = '';
+  for (let i = 0; i < n; i += 1) out += CRED_ALPHABET[buf[i] % CRED_ALPHABET.length];
+  return out;
+}
+
+// 代理类服务留空账号密码时自动生成，避免裸奔的 socks5
+function genCreds() {
+  return { user: `u${randStr(6)}`, pass: randStr(16) };
+}
+
 let authCfg = { username: 'admin', salt: '', hash: '', publicHost: '' };
 const sessions = new Map();
 
@@ -532,6 +547,7 @@ function validate(body, selfName) {
   const chain = String(body.chain || '').trim();
   if (chain) parseChainSpec(chain);
   if (authUser && !authPass && !selfName) throw new Error('填了用户名就必须填密码');
+  if (!authUser && authPass) throw new Error('填了密码就必须填用户名');
   return { type, port, target: isForward ? target : '', authUser, authPass, chain, isForward };
 }
 
@@ -579,6 +595,17 @@ async function createService(body) {
   const v = validate(body);
   await assertPortFree(v.port);
 
+  // 代理类服务没填账号密码时自动生成，避免开出一个无认证的 socks5/http
+  let authUser = v.authUser;
+  let authPass = v.authPass;
+  let generated = false;
+  if (PROXY_TYPES.has(v.type) && !authUser && !authPass) {
+    const c = genCreds();
+    authUser = c.user;
+    authPass = c.pass;
+    generated = true;
+  }
+
   const existing = await listServices();
   let name = `svc-${v.port}`;
   let i = 2;
@@ -586,14 +613,14 @@ async function createService(body) {
 
   const m = {
     name, port: v.port, type: v.type, target: v.target,
-    chain: v.chain, authUser: v.authUser, authPass: v.authPass,
+    chain: v.chain, authUser, authPass,
     createdAt: new Date().toISOString(),
   };
   await applyService(m, 'post');
   meta.set(name, m);
   await saveMeta();
-  log('service created', name, v.type, v.target || v.chain || 'direct');
-  return { name, port: v.port, type: v.type, target: v.target, chain: v.chain };
+  log('service created', name, v.type, v.target || v.chain || 'direct', generated ? 'auth auto-generated' : '');
+  return { name, port: v.port, type: v.type, target: v.target, chain: v.chain, authUser, authPass, generated };
 }
 
 async function updateService(name, body) {
@@ -601,20 +628,29 @@ async function updateService(name, body) {
   const v = validate(body, name);
   await assertPortFree(v.port, name);
 
-  const authPass = v.authPass || (v.authUser === old.authUser ? old.authPass || '' : '');
-  if (v.authUser && !authPass) throw new Error('修改用户名时必须同时填写密码');
+  let authUser = v.authUser;
+  let authPass = v.authPass || (v.authUser === old.authUser ? old.authPass || '' : '');
+  let generated = false;
+  // 编辑时把账号密码都清空，等同于「不填」，重新生成一套
+  if (PROXY_TYPES.has(v.type) && !authUser && !authPass) {
+    const c = genCreds();
+    authUser = c.user;
+    authPass = c.pass;
+    generated = true;
+  }
+  if (authUser && !authPass) throw new Error('修改用户名时必须同时填写密码');
 
   const m = {
     name, port: v.port, type: v.type, target: v.target,
-    chain: v.chain, authUser: v.authUser, authPass,
+    chain: v.chain, authUser, authPass,
     createdAt: old.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
   await applyService(m, 'put');
   meta.set(name, m);
   await saveMeta();
-  log('service updated', name, v.type, v.target || v.chain || 'direct');
-  return { name, port: v.port, type: v.type, target: v.target, chain: v.chain };
+  log('service updated', name, v.type, v.target || v.chain || 'direct', generated ? 'auth auto-generated' : '');
+  return { name, port: v.port, type: v.type, target: v.target, chain: v.chain, authUser, authPass, generated };
 }
 
 async function deleteService(name) {

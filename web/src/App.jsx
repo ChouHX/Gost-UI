@@ -13,6 +13,7 @@ import Login from './components/Login.jsx';
 import Settings from './components/Settings.jsx';
 import ServiceCards from './components/ServiceCards.jsx';
 import ServiceDrawer from './components/ServiceDrawer.jsx';
+import { useMedia } from './useMedia.js';
 
 const { Header, Content } = Layout;
 const { Row, Col } = Grid;
@@ -41,6 +42,8 @@ function Main({ me, onLogout }) {
   const [tab, setTab] = useState('dashboard');
   const [drawer, setDrawer] = useState({ visible: false, editName: null });
   const [pings, setPings] = useState({});
+  // 窄屏只固定「操作」列，否则两列固定后中间可滚动区域太窄
+  const narrow = useMedia('(max-width: 767px)');
 
   const handleAuthError = useCallback((e) => {
     if (e && e.status === 401) {
@@ -121,11 +124,17 @@ function Main({ me, onLogout }) {
   };
 
   const columns = [
-    { title: '名称', dataIndex: 'name', render: (v) => <Text code>{v}</Text> },
+    {
+      title: '名称',
+      dataIndex: 'name',
+      width: narrow ? 132 : 168,
+      fixed: narrow ? undefined : 'left',
+      render: (v) => <Text code>{v}</Text>,
+    },
     {
       title: '类型',
       dataIndex: 'type',
-      width: 100,
+      width: 104,
       render: (v) => (
         <Tag size="small" color={PROXY_TYPES.includes(v) ? 'green' : 'arcoblue'}>
           {TYPE_LABEL[v] || v}
@@ -135,7 +144,7 @@ function Main({ me, onLogout }) {
     {
       title: '监听',
       dataIndex: 'port',
-      width: 88,
+      width: 84,
       render: (v) => <Text code style={{ whiteSpace: 'nowrap' }}>:{v}</Text>,
     },
     {
@@ -156,14 +165,14 @@ function Main({ me, onLogout }) {
     {
       title: '认证',
       dataIndex: 'auth',
-      width: 80,
+      width: 96,
       render: (v) => (v ? <Text>{v}</Text> : <Text type="secondary">-</Text>),
     },
     { title: '入站', dataIndex: 'rx', width: 92, align: 'right', render: (v) => fmtBytes(v) },
     { title: '出站', dataIndex: 'tx', width: 92, align: 'right', render: (v) => fmtBytes(v) },
     {
       title: '延迟',
-      width: 78,
+      width: 84,
       align: 'right',
       render: (_, r) => {
         const p = pings[r.name] || {};
@@ -175,8 +184,9 @@ function Main({ me, onLogout }) {
     },
     {
       title: '操作',
-      width: 140,
+      width: 132,
       align: 'right',
+      fixed: 'right',
       render: (_, r) => (
         <Space size={2}>
           <Tooltip content={r.exportUrl || '未设置对外地址'}>
@@ -213,16 +223,16 @@ function Main({ me, onLogout }) {
   const dashboard = (
     <>
       <Row gutter={10}>
-        <Col span={6}>
+        <Col xs={12} sm={12} md={12} lg={6}>
           <StatCard label="服务总数" value={totals.count} extra={`转发 ${totals.forward} · 代理 ${totals.proxy}`} />
         </Col>
-        <Col span={6}>
+        <Col xs={12} sm={12} md={12} lg={6}>
           <StatCard label="入站流量" value={fmtBytes(totals.rx)} extra={fmtRate(totals.rxRate)} />
         </Col>
-        <Col span={6}>
+        <Col xs={12} sm={12} md={12} lg={6}>
           <StatCard label="出站流量" value={fmtBytes(totals.tx)} extra={fmtRate(totals.txRate)} />
         </Col>
-        <Col span={6}>
+        <Col xs={12} sm={12} md={12} lg={6}>
           <StatCard
             label="采集状态"
             value={state?.lastCollect ? hhmm(state.lastCollect) : '等待中'}
@@ -233,20 +243,25 @@ function Main({ me, onLogout }) {
 
       <Card
         bordered
+        className="app-card"
         style={{ marginTop: 10 }}
         title="服务概览"
-        extra={<Text type="secondary" style={{ fontSize: 12 }}>复制链接需先在设置中填写对外地址</Text>}
+        extra={(
+          <Text type="secondary" className="hide-sm" style={{ fontSize: 12 }}>
+            复制链接需先在设置中填写对外地址
+          </Text>
+        )}
       >
         <ServiceCards
           services={services}
           pings={pings}
           onPing={doPing}
-            onCopyDone={(ok, url) => {
-              if (!url) return Message.warning('请先在设置里填写对外地址');
-              return ok
-                ? Message.success(`已复制 ${url}`)
-                : Message.error('复制失败，请手动选择文本');
-            }}
+          onCopyDone={(ok, url) => {
+            if (!url) return Message.warning('请先在设置里填写对外地址');
+            return ok
+              ? Message.success(`已复制 ${url}`)
+              : Message.error('复制失败，请手动选择文本');
+          }}
         />
       </Card>
     </>
@@ -255,25 +270,29 @@ function Main({ me, onLogout }) {
   const manage = (
     <Card
       bordered
+      className="app-card"
       title="转发管理"
       extra={(
-        <Space>
-          <Text type="secondary" style={{ fontSize: 12 }}>
+        <Space className="card-extra">
+          <Text type="secondary" className="hide-sm" style={{ fontSize: 12 }}>
             端口池 {state ? `${state.portRange[0]}-${state.portRange[1]}` : '-'}
           </Text>
-          <Button icon={<IconRefresh />} onClick={loadState}>刷新</Button>
+          <Button className="hide-sm" icon={<IconRefresh />} onClick={loadState}>刷新</Button>
           <Button type="primary" icon={<IconPlus />} onClick={() => setDrawer({ visible: true, editName: null })}>
-            新建服务
+            <span className="hide-xs">新建服务</span>
+            <span className="show-xs">新建</span>
           </Button>
         </Space>
       )}
     >
       <Table
         rowKey="name"
+        className="gost-table"
         size="small"
         pagination={false}
         data={services}
         columns={columns}
+        scroll={{ x: 'max-content' }}
         noDataElement={<Empty description="暂无服务，点击右上角新建" />}
       />
     </Card>
@@ -281,25 +300,21 @@ function Main({ me, onLogout }) {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Header
-        style={{
-          display: 'flex', alignItems: 'center', gap: 12,
-          padding: '0 20px', height: 56, borderBottom: '1px solid var(--color-border-2)',
-        }}
-      >
-        <IconThunderbolt style={{ fontSize: 18, color: 'rgb(var(--arcoblue-6))' }} />
-        <span style={{ fontSize: 15, fontWeight: 500 }}>GOST 面板</span>
+      <Header className="app-header">
+        <IconThunderbolt style={{ fontSize: 18, color: 'rgb(var(--arcoblue-6))', flexShrink: 0 }} />
+        <span style={{ fontSize: 15, fontWeight: 500, whiteSpace: 'nowrap' }}>GOST 面板</span>
         <Badge
           status={state?.gostOnline ? 'success' : 'danger'}
-          text={state?.gostOnline ? '节点在线' : '节点离线'}
+          text={state?.gostOnline ? '在线' : '离线'}
         />
-        <Tag bordered>{state?.publicHost || '未设置对外地址'}</Tag>
+        <Tag bordered className="hide-md">{state?.publicHost || '未设置对外地址'}</Tag>
         <div style={{ flex: 1 }} />
-        <Text type="secondary" style={{ fontSize: 12 }}>{me?.username}</Text>
-        <Button icon={<IconRefresh />} onClick={loadState}>刷新</Button>
+        <Text type="secondary" className="hide-sm" style={{ fontSize: 12 }}>{me?.username}</Text>
+        <Button icon={<IconRefresh />} onClick={loadState} className="hide-sm">刷新</Button>
+        <Button icon={<IconRefresh />} onClick={loadState} className="show-sm" aria-label="刷新" />
       </Header>
 
-      <Content style={{ padding: '0 20px 24px' }}>
+      <Content className="app-content">
         <Spin loading={loading} style={{ width: '100%' }}>
           <Tabs activeTab={tab} onChange={setTab} type="line" style={{ marginTop: 4 }}>
             <Tabs.TabPane key="dashboard" title="概览">{dashboard}</Tabs.TabPane>

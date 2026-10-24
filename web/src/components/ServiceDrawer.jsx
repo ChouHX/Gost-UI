@@ -52,11 +52,25 @@ export default function ServiceDrawer({ visible, editName, portRange, suggestPor
         chain: (values.chain || '').trim(),
       };
       if (isEdit) {
-        await api(`/api/services/${encodeURIComponent(editName)}`, { method: 'PUT', body: JSON.stringify(body) });
-        Message.success('已保存');
+        const r = await api(`/api/services/${encodeURIComponent(editName)}`, { method: 'PUT', body: JSON.stringify(body) });
+        if (r?.service?.generated) {
+          Message.success({
+            content: `已保存，并重新生成账号：${r.service.authUser} / ${r.service.authPass}`,
+            duration: 8000,
+          });
+        } else {
+          Message.success('已保存');
+        }
       } else {
         const r = await api('/api/services', { method: 'POST', body: JSON.stringify(body) });
-        Message.success(`已创建 ${r.service.name}`);
+        if (r?.service?.generated) {
+          Message.success({
+            content: `已创建 ${r.service.name}，自动生成账号：${r.service.authUser} / ${r.service.authPass}`,
+            duration: 8000,
+          });
+        } else {
+          Message.success(`已创建 ${r.service.name}`);
+        }
       }
       onSaved();
       onClose();
@@ -102,15 +116,19 @@ export default function ServiceDrawer({ visible, editName, portRange, suggestPor
 
           {isProxy ? (
             <>
-              <FormItem label="代理用户名" field="authUser" extra="留空表示不需要认证">
-                <Input placeholder="例如 us1" allowClear />
+              <FormItem
+                label="代理用户名"
+                field="authUser"
+                extra={isEdit ? '清空用户名和密码会重新生成一套' : '留空则自动生成，也可自己指定'}
+              >
+                <Input placeholder="留空自动生成" allowClear />
               </FormItem>
               <FormItem
                 label="代理密码"
                 field="authPass"
-                extra={isEdit ? '留空则保持原密码不变' : ''}
+                extra={isEdit ? '留空则保持原密码不变' : '留空自动生成'}
               >
-                <Input.Password placeholder={isEdit ? '留空不修改' : '与用户名配套'} allowClear />
+                <Input.Password placeholder={isEdit ? '留空不修改' : '留空自动生成'} allowClear />
               </FormItem>
             </>
           ) : (
