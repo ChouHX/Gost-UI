@@ -33,21 +33,37 @@ export function hhmm(t) {
 
 export async function copyText(text) {
   if (!text) return false;
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    let ok = false;
-    try { ok = document.execCommand('copy'); } catch { ok = false; }
-    document.body.removeChild(ta);
-    return ok;
+  // 安全上下文（HTTPS / localhost）才有 navigator.clipboard；
+  // HTTP 部署下它是 undefined，必须走 execCommand 兜底。
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      /* 权限被拒时继续走兜底 */
+    }
   }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;';
+  document.body.appendChild(ta);
+  const sel = document.getSelection();
+  const prev = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+  let ok = false;
+  try {
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    ok = document.execCommand('copy');
+  } catch {
+    ok = false;
+  }
+  document.body.removeChild(ta);
+  if (prev && sel) {
+    sel.removeAllRanges();
+    sel.addRange(prev);
+  }
+  return ok;
 }
 
 export const PROXY_TYPES = ['socks5', 'http', 'socks4', 'relay'];

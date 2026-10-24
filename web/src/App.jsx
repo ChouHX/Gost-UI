@@ -241,7 +241,12 @@ function Main({ me, onLogout }) {
           services={services}
           pings={pings}
           onPing={doPing}
-          onCopyDone={(ok, url) => (ok ? Message.success(`已复制 ${url}`) : Message.warning('请先在设置里填写对外地址'))}
+            onCopyDone={(ok, url) => {
+              if (!url) return Message.warning('请先在设置里填写对外地址');
+              return ok
+                ? Message.success(`已复制 ${url}`)
+                : Message.error('复制失败，请手动选择文本');
+            }}
         />
       </Card>
     </>
