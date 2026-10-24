@@ -22,7 +22,10 @@ services:
       PORT_RANGE_END: "18199"
       DATA_DIR: "/data"
     ports:
-      - "18000:8080"
+      # 面板只绑宿主回环，由反代（如 1Panel OpenResty / Nginx）对外提供 https。
+      # 反代在 host 网络或宿主机进程里，都能直连 127.0.0.1:18000。
+      - "127.0.0.1:18000:8080"
+      # 转发端口池必须对外，这才是服务真正的入口
       - "18100-18199:18100-18199"
     volumes:
       - paneldata:/data

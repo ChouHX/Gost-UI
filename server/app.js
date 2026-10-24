@@ -151,10 +151,22 @@ function parseCookies(req) {
   return out;
 }
 
-function issueSession(res) {
+// 面板通常挂在反代后面，直连时是 http、对外是 https。
+// 只有对外走 https 时才给 Cookie 加 Secure，否则直连 http 调试会丢 Cookie。
+function isHttps(req) {
+  const xf = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+  if (xf) return xf === 'https';
+  return Boolean(req.socket && req.socket.encrypted);
+}
+
+function cookieAttrs(req) {
+  return `Path=/; HttpOnly; SameSite=Lax${isHttps(req) ? '; Secure' : ''}`;
+}
+
+function issueSession(req, res) {
   const token = crypto.randomBytes(24).toString('hex');
   sessions.set(token, Date.now() + SESSION_TTL);
-  res.setHeader('Set-Cookie', `gp_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL / 1000}`);
+  res.setHeader('Set-Cookie', `gp_session=${token}; ${cookieAttrs(req)}; Max-Age=${SESSION_TTL / 1000}`);
   return token;
 }
 
@@ -734,7 +746,7 @@ const server = http.createServer(async (req, res) => {
         await new Promise((r) => { setTimeout(r, 400); });
         return json(res, 401, { ok: false, error: '用户名或密码错误' });
       }
-      issueSession(res);
+      issueSession(req, res);
       log('login ok', authCfg.username);
       return json(res, 200, { ok: true, username: authCfg.username });
     } catch (e) {
@@ -756,7 +768,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/logout' && req.method === 'POST') {
       const t = currentSession(req);
       if (t) sessions.delete(t);
-      res.setHeader('Set-Cookie', 'gp_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      res.setHeader('Set-Cookie', `gp_session=; ${cookieAttrs(req)}; Max-Age=0`);
       return json(res, 200, { ok: true });
     }
 
@@ -790,7 +802,7 @@ const server = http.createServer(async (req, res) => {
       authCfg.hash = hashPass(next, authCfg.salt);
       await saveConfig();
       sessions.clear();
-      issueSession(res);
+      issueSession(req, res);
       log('password changed');
       return json(res, 200, { ok: true });
     }

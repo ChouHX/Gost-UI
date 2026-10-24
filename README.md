@@ -33,11 +33,44 @@ docker compose up -d
 
 默认端口：
 
-- `18000` → 面板（容器内 8080）
-- `18100-18199` → 转发端口池
+- `127.0.0.1:18000` → 面板（容器内 8080），**只绑宿主回环，不直接对外**
+- `18100-18199` → 转发端口池，对外
 - gost API `18080` 与 metrics `9000` 只监听容器内 `127.0.0.1`，不对外
 
 镜像来自 GitHub Actions 构建：`ghcr.io/chouhx/gost-ui:latest`。
+
+## 反向代理
+
+面板本身不监听公网，交给反代提供 https。以 1Panel OpenResty 为例，反代目标填 `http://127.0.0.1:18000` 即可（OpenResty 容器是 host 网络，能直连宿主回环）。
+
+Nginx 最小配置：
+
+```nginx
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name hk.example.com;
+
+    ssl_certificate     /path/fullchain.pem;
+    ssl_certificate_key /path/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:18000;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade           $http_upgrade;
+        proxy_set_header Connection        $http_connection;
+    }
+}
+```
+
+两点注意：
+
+- `X-Forwarded-Proto` 必须传，面板靠它判断对外是 https，从而给会话 Cookie 加 `Secure`。
+- 走 https 后 `navigator.clipboard` 才可用；面板对 http 场景已做 `execCommand` 兜底，两种都能复制。
 
 ## 本地开发
 
