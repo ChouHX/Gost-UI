@@ -2,10 +2,9 @@ name: gostpanel
 
 services:
   panel:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: gostpanel:latest
+    # 镜像由 GitHub Actions 构建并推送到 GHCR（见 .github/workflows/docker.yml）
+    image: ghcr.io/chouhx/gost-ui:latest
+    pull_policy: always
     container_name: gostpanel
     restart: unless-stopped
     environment:
