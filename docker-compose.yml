@@ -1,0 +1,40 @@
+name: gostpanel
+
+services:
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gostpanel:latest
+    container_name: gostpanel
+    restart: unless-stopped
+    environment:
+      PANEL_PORT: "8080"
+      PANEL_USER: "${PANEL_USER:-admin}"
+      PANEL_PASS: "${PANEL_PASS:?set PANEL_PASS in .env}"
+      GOST_API: "http://127.0.0.1:18080"
+      GOST_API_USER: "gostapi"
+      GOST_API_PASS: "${GOST_API_PASS:?set GOST_API_PASS in .env}"
+      GOST_METRICS: "http://127.0.0.1:9000/metrics"
+      GOST_MANAGED: "1"
+      GOST_CONFIG: "/etc/gost/gost.yml"
+      PUBLIC_HOST: "${PUBLIC_HOST:-}"
+      PORT_RANGE_START: "18100"
+      PORT_RANGE_END: "18199"
+      DATA_DIR: "/data"
+    ports:
+      - "18000:8080"
+      - "18100-18199:18100-18199"
+    volumes:
+      - paneldata:/data
+      # gost 读这份配置；API 变更只存内存，由面板的 /data/services.json 负责重建
+      - ./gost/gost.yml:/etc/gost/gost.yml
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  paneldata:
+    name: gostpanel-data

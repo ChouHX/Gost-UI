@@ -1,0 +1,18 @@
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+}
+
+body {
+  background: var(--color-bg-1, #17171a);
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.arco-layout-header {
+  background: var(--color-bg-2);
+}
+
+.arco-card {
+  border-radius: 8px;
+}

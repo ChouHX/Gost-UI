@@ -1,0 +1,30 @@
+# gost v3 配置（单容器：gost 与面板跑在同一个容器里）
+# API / metrics 只监听 127.0.0.1，容器外不可达
+
+api:
+  addr: "127.0.0.1:18080"
+  auth:
+    username: gostapi
+    password: "IhDoZSGoYGu-s2d7"
+
+metrics:
+  addr: "127.0.0.1:9000"
+  path: /metrics
+
+log:
+  level: info
+  format: text
+  output: stdout
+
+services:
+  # 示例转发：18100 -> 本机面板 8080，访问它就能看到流量被统计
+  - name: demo-forward
+    addr: ":18100"
+    handler:
+      type: tcp
+    listener:
+      type: tcp
+    forwarder:
+      nodes:
+        - name: target-0
+          addr: "127.0.0.1:8080"
